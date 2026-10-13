@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Test & Docker Build
+name: CI/CD Pipeline - Gradle Test & Docker GHCR Push
 
 on:
   push:
@@ -7,9 +7,16 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
+  # ==========================================================
+  # Job 1: Chạy kiểm thử tự động và đóng gói sản phẩm JAR
+  # ==========================================================
   test:
-    name: Run Gradle Tests & Package JAR
+    name: Gradle Test & Package JAR
     runs-on: ubuntu-latest
 
     steps:
@@ -17,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Thiết lập môi trường Java JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -26,31 +33,52 @@ jobs:
       - name: Cấp quyền thực thi cho Gradle Wrapper
         run: chmod +x gradlew
 
-      - name: Thực thi kiểm thử và đóng gói JAR
-        run: ./gradlew test bootJar --no-daemon
+      - name: Chạy kiểm thử tự động (Gradle Test)
+        run: ./gradlew test --no-daemon
 
+      - name: Đóng gói sản phẩm JAR (Build & Assemble)
+        run: ./gradlew assemble --no-daemon
+
+  # ==========================================================
+  # Job 2: Đóng gói Docker Image và đẩy lên GHCR
+  # Ràng buộc: Chỉ chạy khi Job test hoàn thành thành công (needs: test)
+  # ==========================================================
   docker-build:
     name: Build and Push Docker Image
-    needs: test # Chỉ chạy khi job test hoàn thành màu xanh
+    needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout mã nguồn
         uses: actions/checkout@v4
 
-      - name: Đăng nhập vào GitHub Container Registry
+      - name: Đăng nhập vào GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.REGISTRY_TOKEN }}
+          password: ${{ secrets.REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Đóng gói và đẩy Docker Image lên GHCR
+      - name: Thiết lập Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Chuẩn hóa metadata và tên Image cho GHCR
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Đóng gói Dockerfile và Push lên GHCR
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/spring-boot-app:latest
-            ghcr.io/${{ github.repository_owner }}/spring-boot-app:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -1,31 +1,41 @@
-# ==========================================
-# Stage 1: Build JAR bằng Gradle
-# ==========================================
+# ========================================================
+# Multi-stage Dockerfile cho ứng dụng Spring Boot Gradle
+# Stage 1: Build stage (compile & package JAR)
+# ========================================================
 FROM eclipse-temurin:17-jdk-alpine AS builder
 
 WORKDIR /app
 
-# Sao chép các tệp cấu hình Gradle trước để tận dụng Docker layer caching
+# Copy các tệp cấu hình Gradle wrapper
 COPY gradlew .
 COPY gradle gradle
 COPY build.gradle settings.gradle ./
 
+# Cấp quyền thực thi cho gradle wrapper
 RUN chmod +x gradlew
 
-# Sao chép mã nguồn và đóng gói JAR (bỏ qua test vì đã test ở job CI)
+# Copy toàn bộ mã nguồn ứng dụng
 COPY src src
+
+# Đóng gói file JAR của Spring Boot (bỏ qua test vì test đã được chạy độc lập ở Job test)
 RUN ./gradlew bootJar -x test --no-daemon
 
-# ==========================================
-# Stage 2: Runtime Image gọn nhẹ
-# ==========================================
+# ========================================================
+# Stage 2: Runtime stage (Production JRE siêu nhẹ)
+# ========================================================
 FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
-# Sao chép file JAR từ stage builder sang
+# Tạo user không có đặc quyền root để tăng tính bảo mật
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
+# Sao chép tệp .jar từ builder stage
 COPY --from=builder /app/build/libs/*.jar app.jar
 
+# Khai báo cổng 8080 cho ứng dụng Spring Boot
 EXPOSE 8080
 
+# Thiết lập điểm khởi chạy ứng dụng
 ENTRYPOINT ["java", "-jar", "app.jar"]
